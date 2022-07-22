@@ -1,4 +1,5 @@
 //! src/config.rs
+use secrecy::{ExposeSecret, Secret};
 
 #[derive(serde::Deserialize)]
 pub struct Settings {
@@ -9,37 +10,39 @@ pub struct Settings {
 #[derive(serde::Deserialize)]
 pub struct DatabaseSettings {
     pub user: String,
-    pub password: String,
+    pub password: Secret<String>,
     pub port: u16,
     pub host: String,
     pub db_name: String,
 }
 
 impl DatabaseSettings {
-    pub fn connection_string(&self) -> String {
-        format!(
+    pub fn connection_string(&self) -> Secret<String> {
+        Secret::new(format!(
             "postgres://{}:{}@{}:{}/{}",
-            self.user, self.password, self.host, self.port, self.db_name
-        )
+            self.user,
+            self.password.expose_secret(),
+            self.host,
+            self.port,
+            self.db_name
+        ))
     }
 
-    pub fn connection_string_without_db(&self) -> String {
-        format!(
+    pub fn connection_string_without_db(&self) -> Secret<String> {
+        Secret::new(format!(
             "postgres://{}:{}@{}:{}",
-            self.user, self.password, self.host, self.port
-        )
+            self.user,
+            self.password.expose_secret(),
+            self.host,
+            self.port
+        ))
     }
 }
 
 pub fn get_config() -> Result<Settings, config::ConfigError> {
-    // init the configuration reader
-    let mut settings = config::Config::default();
-
-    // add configuration values from a file named `config`.
-    // it will look for any top-level file with an extension
-    // that `config` knows how to parse: yaml, json etc
-    settings.merge(config::File::with_name("config"))?;
-
-    // try to convert the config values into `Settings` type
-    settings.try_into()
+    let config = config::Config::builder()
+        .add_source(config::File::with_name("config"))
+        .build()
+        .unwrap();
+    config.try_deserialize()
 }
