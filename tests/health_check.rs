@@ -4,6 +4,7 @@ use secrecy::ExposeSecret;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::net::TcpListener;
 use uuid::Uuid;
+use zero2prod::email_client::EmailClient;
 use zero2prod::settings::{get_config, DatabaseSettings};
 use zero2prod::startup::run;
 use zero2prod::telemetry::{get_subscriber, init_subscriber};
@@ -30,7 +31,7 @@ static TRACING: Lazy<()> = Lazy::new(|| {
 async fn spawn_app() -> TestApp {
     Lazy::force(&TRACING);
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind random port");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind address");
     let port = listener.local_addr().unwrap().port();
     let address = format!("http://127.0.0.1:{}", port);
 
@@ -38,7 +39,18 @@ async fn spawn_app() -> TestApp {
     config.database.db_name = Uuid::new_v4().to_string();
     let pool = configurate_database(&config.database).await;
 
-    let server = run(listener, pool.clone()).expect("Failed to bind address");
+    let sender_email = config
+        .email_client
+        .sender()
+        .expect("Invalid sender email address");
+    let email_client = EmailClient::new(
+        config.email_client.base_url.clone(),
+        sender_email,
+        config.email_client.token.clone(),
+        config.email_client.timeout().clone(),
+    );
+
+    let server = run(listener, pool.clone(), email_client).expect("Failed to new server");
     // launch the server as a background task
     // tokio::spawn returns a handle to the spawned future
     let _ = tokio::spawn(server);

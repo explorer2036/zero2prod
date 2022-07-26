@@ -2,6 +2,7 @@
 use secrecy::ExposeSecret;
 use sqlx::PgPool;
 use std::net::TcpListener;
+use zero2prod::email_client::EmailClient;
 use zero2prod::settings::get_config;
 use zero2prod::startup::run;
 use zero2prod::telemetry::get_subscriber;
@@ -16,9 +17,21 @@ async fn main() -> std::io::Result<()> {
     let pool = PgPool::connect(&config.database.connection_string().expose_secret())
         .await
         .expect("Failed to connect to postgres");
-    let address = format!("127.0.0.1:{}", config.port);
-    log::info!("server address: {}", address);
-    let listener = TcpListener::bind(address).expect("Failed to bind port");
 
-    run(listener, pool)?.await
+    let sender_email = config
+        .email_client
+        .sender()
+        .expect("Invalid sender email address");
+    let email_client = EmailClient::new(
+        config.email_client.base_url.clone(),
+        sender_email,
+        config.email_client.token.clone(),
+        config.email_client.timeout().clone(),
+    );
+
+    let address = format!("{}:{}", config.application.host, config.application.port);
+    log::info!("server address: {}", address);
+    let listener = TcpListener::bind(address)?;
+    run(listener, pool, email_client)?.await?;
+    Ok(())
 }
