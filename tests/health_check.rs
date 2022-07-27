@@ -4,6 +4,7 @@ use secrecy::ExposeSecret;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::net::TcpListener;
 use uuid::Uuid;
+use wiremock::MockServer;
 use zero2prod::email_client::EmailClient;
 use zero2prod::settings::{get_config, DatabaseSettings};
 use zero2prod::startup::run;
@@ -12,6 +13,7 @@ use zero2prod::telemetry::{get_subscriber, init_subscriber};
 pub struct TestApp {
     pub address: String,
     pub pool: PgPool,
+    pub email_server: MockServer,
 }
 
 static TRACING: Lazy<()> = Lazy::new(|| {
@@ -31,12 +33,10 @@ static TRACING: Lazy<()> = Lazy::new(|| {
 async fn spawn_app() -> TestApp {
     Lazy::force(&TRACING);
 
-    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind address");
-    let port = listener.local_addr().unwrap().port();
-    let address = format!("http://127.0.0.1:{}", port);
-
+    let email_server = MockServer::start().await;
     let mut config = get_config().expect("Failed to read config");
     config.database.db_name = Uuid::new_v4().to_string();
+    config.email_client.base_url = email_server.uri();
     let pool = configurate_database(&config.database).await;
 
     let sender_email = config
@@ -50,14 +50,18 @@ async fn spawn_app() -> TestApp {
         config.email_client.timeout().clone(),
     );
 
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind address");
+    let port = listener.local_addr().unwrap().port();
+    let address = format!("http://127.0.0.1:{}", port);
     let server = run(listener, pool.clone(), email_client).expect("Failed to new server");
     // launch the server as a background task
     // tokio::spawn returns a handle to the spawned future
     let _ = tokio::spawn(server);
 
     TestApp {
-        address: address,
-        pool: pool,
+        address,
+        pool,
+        email_server,
     }
 }
 
@@ -91,7 +95,6 @@ async fn configurate_database(config: &DatabaseSettings) -> PgPool {
 // `cargo expand --test health_check` (<- name of the test file)
 #[tokio::test]
 async fn health_check_works() {
-    // no await, no expect
     let app = spawn_app().await;
     let client = reqwest::Client::new();
     let response = client
