@@ -29,6 +29,18 @@ static TRACING: Lazy<()> = Lazy::new(|| {
     }
 });
 
+impl TestApp {
+    pub async fn post_subscriptions(&self, body: String) -> reqwest::Response {
+        reqwest::Client::new()
+            .post(format!("{}/subscriptions", &self.address))
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .expect("Failed to execute request")
+    }
+}
+
 // Lauch our applicationin the background
 async fn spawn_app() -> TestApp {
     Lazy::force(&TRACING);
@@ -110,16 +122,9 @@ async fn health_check_works() {
 #[tokio::test]
 async fn subscribe_returns_200_for_valid_form_data() {
     let app = spawn_app().await;
-    let client = reqwest::Client::new();
 
     let body = "name=alon&email=alonlong%40gmail.com";
-    let response = client
-        .post(format!("{}/subscriptions", &app.address))
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(body)
-        .send()
-        .await
-        .expect("Failed to execute request");
+    let response = app.post_subscriptions(body.into()).await;
     assert_eq!(200, response.status().as_u16());
 
     let saved = sqlx::query!("SELECT email, name FROM subscriptions")
@@ -129,4 +134,18 @@ async fn subscribe_returns_200_for_valid_form_data() {
 
     assert_eq!(saved.email, "alonlong@gmail.com");
     assert_eq!(saved.name, "alon");
+}
+
+#[tokio::test]
+async fn subscribe_fails_if_there_is_a_fatal_database_error() {
+    let app = spawn_app().await;
+
+    let body = "name=alon&email=alonlong%40gmail.com";
+    sqlx::query!("ALTER TABLE subscription_tokens DROP COLUMN token;")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let response = app.post_subscriptions(body.into()).await;
+    assert_eq!(500, response.status().as_u16());
 }

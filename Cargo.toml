@@ -43,6 +43,8 @@ unicode-segmentation = "1.9.0"
 validator = "0.15.0"
 reqwest = { version = "0.11.11", features = ["json", "rustls-tls"] }
 rand = { version = "0.8.5", features = ["std_rng"] }
+anyhow = "1.0.58"
+thiserror = "1.0.31"
 
 # Dev dependencies are used exclusively when running tests or examples
 [dev-dependencies]
