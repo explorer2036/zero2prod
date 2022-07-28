@@ -46,7 +46,8 @@ rand = { version = "0.8.5", features = ["std_rng"] }
 anyhow = "1.0.58"
 thiserror = "1.0.31"
 base64 = "0.13.0"
-sha3 = "0.9"
+sha3 = "0.10.1"
+argon2 = { version = "0.4.0", features = ["std"] }
 
 # Dev dependencies are used exclusively when running tests or examples
 [dev-dependencies]
