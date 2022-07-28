@@ -1,6 +1,8 @@
 //! tests/health_check.rs
 use once_cell::sync::Lazy;
+use reqwest::header;
 use secrecy::ExposeSecret;
+use sha3::Digest;
 use sqlx::{Connection, Executor, PgConnection, PgPool};
 use std::net::TcpListener;
 use uuid::Uuid;
@@ -14,6 +16,36 @@ pub struct TestApp {
     pub address: String,
     pub pool: PgPool,
     pub email_server: MockServer,
+    pub test_user: TestUser,
+}
+
+pub struct TestUser {
+    pub id: Uuid,
+    pub username: String,
+    pub password: String,
+}
+
+impl TestUser {
+    pub fn generate() -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            username: Uuid::new_v4().to_string(),
+            password: Uuid::new_v4().to_string(),
+        }
+    }
+
+    async fn store(&self, pool: &PgPool) {
+        let password = format!("{:x}", sha3::Sha3_256::digest(self.password.as_bytes()));
+        sqlx::query!(
+            "INSERT INTO users (id, username, password) VALUES ($1, $2, $3)",
+            self.id,
+            self.username,
+            password,
+        )
+        .execute(pool)
+        .await
+        .expect("Failed to create test user");
+    }
 }
 
 static TRACING: Lazy<()> = Lazy::new(|| {
@@ -38,6 +70,24 @@ impl TestApp {
             .send()
             .await
             .expect("Failed to execute request")
+    }
+
+    pub async fn post_newsletters(&self, body: serde_json::Value) -> reqwest::Response {
+        reqwest::Client::new()
+            .post(&format!("{}/newsletters", &self.address))
+            .basic_auth(&self.test_user.username, Some(&self.test_user.password))
+            .json(&body)
+            .send()
+            .await
+            .expect("Failed to execute request")
+    }
+
+    pub async fn test_user(&self) -> (String, String) {
+        let row = sqlx::query!("SELECT username, password FROM users LIMIT 1")
+            .fetch_one(&self.pool)
+            .await
+            .expect("Failed to create test  users");
+        (row.username, row.password)
     }
 }
 
@@ -70,11 +120,15 @@ async fn spawn_app() -> TestApp {
     // tokio::spawn returns a handle to the spawned future
     let _ = tokio::spawn(server);
 
-    TestApp {
+    let test_app = TestApp {
         address,
         pool,
         email_server,
-    }
+        test_user: TestUser::generate(),
+    };
+    test_app.test_user.store(&test_app.pool).await;
+
+    test_app
 }
 
 async fn configurate_database(config: &DatabaseSettings) -> PgPool {
@@ -148,4 +202,28 @@ async fn subscribe_fails_if_there_is_a_fatal_database_error() {
 
     let response = app.post_subscriptions(body.into()).await;
     assert_eq!(500, response.status().as_u16());
+}
+
+#[tokio::test]
+async fn requests_missing_authorization_are_rejected() {
+    let app = spawn_app().await;
+
+    let response = reqwest::Client::new()
+        .post(&format!("{}/newsletters", &app.address))
+        .json(&serde_json::json!({
+            "title": "Newsletter title",
+            "content": {
+               "text": "Newsletter body as plain text",
+               "html": "<p>Newsletter body as HTML</p>",
+            }
+        }))
+        .send()
+        .await
+        .expect("Failed to execute request");
+
+    assert_eq!(401, response.status().as_u16());
+    assert_eq!(
+        r#"Basic realm="publish""#,
+        response.headers()[header::WWW_AUTHENTICATE]
+    );
 }
